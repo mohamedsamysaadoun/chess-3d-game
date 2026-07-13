@@ -1,382 +1,241 @@
-// Reconstructed ChessEngine (originally SechDMG - sealed class)
-// Complete chess engine with alpha-beta search and PST evaluation
-//
-// This reconstruction is based on:
-// - Decoded class structure from Il2CppDumper (dump.cs)
-// - ARM64 disassembly from capstone (39 functions, 5,770 instructions)
-// - Ghidra decompiled C pseudocode (30 functions)
-// - il2cpp.h struct definitions (field offsets)
-// - Standard chess engine patterns (mailbox representation)
-//
-// The engine uses:
-// - 10x12 mailbox board representation (classic)
-// - Alpha-beta pruning with quiescence search
-// - Piece-square table evaluation
-// - History heuristic for move ordering
-// - Principal variation (PV) tracking
-// - Zobrist hashing for repetition detection
-// - Opening book (first 5 moves)
-
 using System;
 using System.Collections.Generic;
-using UnityEngine;
 
 namespace Chess3D.Game
 {
     /// <summary>
-    /// Complete chess engine implementation.
-    /// Reconstructed from Real Chess 3D (com.eivaagames.RealChess3DFree v1.35)
+    /// Complete chess engine - reconstructed from Real Chess 3D.
+    /// Uses alpha-beta search with quiescence and PST evaluation.
     /// </summary>
     public sealed class ChessEngine
     {
-        // ================================================================
-        // CONSTANTS (from dump.cs - decoded from Marathi/Hindi obfuscation)
-        // ================================================================
+        // Constants
+        private const int MAX_DEPTH = 10;
+        private const int MAX_PLY = 32;
+        private const int MATE_SCORE = 100000;
+        private const int MATE_THRESHOLD = 99000;
 
-        private const int MAX_DEPTH = 10;           // MX_D - maximum search depth
-        private const int OPENING_MOVES_COUNT = 5;   // KK_SJ_C - opening moves to consider
-        private const int BOARD_SQUARES = 64;        // T_CHAUKANS
-        private const int PIECE_TYPES = 12;          // PIECE_TYPE_NO
-        private const int MAX_PLY = 32;              // MAX_PLY
-        private const int MAX_MOVES = 1280;          // MAX_MOV
-
-        // Square constants (white perspective, a8=0 to h1=63)
-        private const int A1 = 56, B1 = 57, C1 = 58, D1 = 59;
-        private const int E1 = 60, F1 = 61, G1 = 62, H1 = 63;
-        private const int A8 = 0, B8 = 1, C8 = 2, D8 = 3;
-        private const int E8 = 4, F8 = 5, G8 = 6, H8 = 7;
-
-        // Piece type constants (decoded from Marathi)
-        // DHOLA=0, KOLA=1, SANYA=0, HAST=1, BAJIR=2, NOKA=3, CHAMYA=4, SENSA=5, SUNYA=6
+        // Piece types
         internal const int EMPTY = 0;
-        internal const int OFFBOARD = 1;
-        internal const int COLOR_NONE = 0;
-        internal const int WHITE = 1;
-        internal const int BLACK = 2;
+        internal const int PIECE_PAWN = 1;
+        internal const int PIECE_KNIGHT = 2;
+        internal const int PIECE_BISHOP = 3;
+        internal const int PIECE_ROOK = 4;
+        internal const int PIECE_QUEEN = 5;
+        internal const int PIECE_KING = 6;
 
-        // Piece types (index into piece arrays)
-        internal const int PIECE_PAWN = 0;
-        internal const int PIECE_KNIGHT = 1;
-        internal const int PIECE_BISHOP = 2;
-        internal const int PIECE_ROOK = 3;
-        internal const int PIECE_QUEEN = 4;
-        internal const int PIECE_KING = 5;
+        // Colors
+        internal const int WHITE = 0;
+        internal const int BLACK = 1;
+        internal const int NO_COLOR = -1;
 
-        // Move flag bits (from Move.bits field)
+        // Move flags
         public const byte FLAG_CAPTURE = 0x01;
         public const byte FLAG_CASTLE = 0x02;
         public const byte FLAG_EN_PASSANT = 0x04;
         public const byte FLAG_PROMOTION = 0x08;
         public const byte FLAG_DOUBLE_PAWN = 0x10;
 
-        // ================================================================
-        // STATIC DATA TABLES
-        // ================================================================
+        // Square constants
+        private const int A1 = 56, E1 = 60, H1 = 63;
+        private const int A8 = 0, E8 = 4, H8 = 7;
 
-        // 10x12 mailbox board (120 squares with off-board padding)
-        // This converts 0-63 square indices to 0-119 mailbox indices
-        private static readonly int[] mailbox = new int[120] {
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1,  0,  1,  2,  3,  4,  5,  6,  7, -1,
-            -1,  8,  9, 10, 11, 12, 13, 14, 15, -1,
-            -1, 16, 17, 18, 19, 20, 21, 22, 23, -1,
-            -1, 24, 25, 26, 27, 28, 29, 30, 31, -1,
-            -1, 32, 33, 34, 35, 36, 37, 38, 39, -1,
-            -1, 40, 41, 42, 43, 44, 45, 46, 47, -1,
-            -1, 48, 49, 50, 51, 52, 53, 54, 55, -1,
-            -1, 56, 57, 58, 59, 60, 61, 62, 63, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
-        };
+        // Board state - using 0x88 board representation for easy off-board detection
+        // 0x88: square = rank * 16 + file; off-board if (square & 0x88) != 0
+        private int[] board;           // 128 squares (0x88)
+        private int[] pieceColor;      // 128 squares
+        private int side;              // Side to move
+        private int castlingRights;    // KQkq bits
+        private int enPassantSq;       // En passant target square (0x88) or -1
+        private int halfMoveClock;
+        private int fullMoveNumber;
 
-        // Reverse lookup: 64→120 conversion
-        private static readonly int[] mailbox64 = new int[64] {
-             21, 22, 23, 24, 25, 26, 27, 28,
-             31, 32, 33, 34, 35, 36, 37, 38,
-             41, 42, 43, 44, 45, 46, 47, 48,
-             51, 52, 53, 54, 55, 56, 57, 58,
-             61, 62, 63, 64, 65, 66, 67, 68,
-             71, 72, 73, 74, 75, 76, 77, 78,
-             81, 82, 83, 84, 85, 86, 87, 88,
-             91, 92, 93, 94, 95, 96, 97, 98
-        };
+        // Search state
+        private int ply;
+        private Move bestMove;
+        private bool searching;
 
-        // Which pieces slide (rook, bishop, queen)
-        private static readonly bool[] slidingPieces = new bool[6] {
-            false,  // pawn
-            false,  // knight
-            true,   // bishop
-            true,   // rook
-            true,   // queen
-            false   // king
-        };
+        // Move list for current ply
+        private List<Move>[] moveList;
+        private Stack<HistoryMove> history;
 
-        // Move offsets in the mailbox (for each piece type)
-        private static readonly int[][] pieceOffsets = new int[6][] {
-            // Pawn (handled separately due to direction/capture/promotion)
-            new int[] { 10, 20, 9, 11 },
+        // Piece values
+        private static readonly int[] pieceValues = { 0, 100, 320, 330, 500, 1000, 20000 };
 
-            // Knight (8 possible moves)
-            new int[] { -21, -19, -12, -8, 8, 12, 19, 21 },
+        // Piece-square tables (from white's perspective, 0x88 format)
+        // Index: square = rank * 16 + file, where rank 0 = rank 8 (top), rank 7 = rank 1 (bottom)
+        private static readonly int[] pawnPST = new int[128];
+        private static readonly int[] knightPST = new int[128];
+        private static readonly int[] bishopPST = new int[128];
+        private static readonly int[] kingPST = new int[128];
+        private static readonly int[] kingEndgamePST = new int[128];
 
-            // Bishop (4 diagonal directions)
-            new int[] { -11, -9, 9, 11 },
+        // Knight offsets (0x88)
+        private static readonly int[] knightOffsets = { -33, -31, -18, -14, 14, 18, 31, 33 };
+        // King offsets
+        private static readonly int[] kingOffsets = { -17, -16, -15, -1, 1, 15, 16, 17 };
+        // Bishop directions
+        private static readonly int[] bishopDirs = { -17, -15, 15, 17 };
+        // Rook directions
+        private static readonly int[] rookDirs = { -16, -1, 1, 16 };
+        // Queen directions
+        private static readonly int[] queenDirs = { -17, -16, -15, -1, 1, 15, 16, 17 };
 
-            // Rook (4 orthogonal directions)
-            new int[] { -10, -1, 1, 10 },
-
-            // Queen (8 directions = bishop + rook)
-            new int[] { -11, -10, -9, -1, 1, 9, 10, 11 },
-
-            // King (8 directions)
-            new int[] { -11, -10, -9, -1, 1, 9, 10, 11 }
-        };
-
-        // Castling rights mask (which bits to clear when a piece moves from/to a square)
-        private static readonly int[] castleMask = new int[64];
         static ChessEngine()
         {
-            // Initialize castle mask
-            // White: A1 (rook), E1 (king), H1 (rook)
-            castleMask[A1] = 0x7;  // Clear white queenside
-            castleMask[E1] = 0x3;  // Clear white both
-            castleMask[H1] = 0xB;  // Clear white kingside
-            // Black: A8 (rook), E8 (king), H8 (rook)
-            castleMask[A8] = 0x7 << 2;  // Clear black queenside
-            castleMask[E8] = 0x3 << 2;  // Clear black both
-            castleMask[H8] = 0xB << 2;  // Clear black kingside
-        }
+            // Initialize PSTs (simplified - using standard values)
+            // Pawn
+            int[] pawnTable = {
+                 0,  0,  0,  0,  0,  0,  0,  0,
+                 5, 10, 10,-20,-20, 10, 10,  5,
+                 5, -5,-10,  0,  0,-10, -5,  5,
+                 0,  0,  0, 20, 20,  0,  0,  0,
+                 5,  5, 10, 25, 25, 10,  5,  5,
+                10, 10, 20, 30, 30, 20, 10, 10,
+                50, 50, 50, 50, 50, 50, 50, 50,
+                 0,  0,  0,  0,  0,  0,  0,  0
+            };
+            int[] knightTable = {
+                -50,-40,-30,-30,-30,-30,-40,-50,
+                -40,-20,  0,  5,  5,  0,-20,-40,
+                -30,  5, 10, 15, 15, 10,  5,-30,
+                -30,  0, 15, 20, 20, 15,  0,-30,
+                -30,  5, 15, 20, 20, 15,  5,-30,
+                -30,  0, 10, 15, 15, 10,  0,-30,
+                -40,-20,  0,  0,  0,  0,-20,-40,
+                -50,-40,-30,-30,-30,-30,-40,-50
+            };
+            int[] bishopTable = {
+                -20,-10,-10,-10,-10,-10,-10,-20,
+                -10,  5,  0,  0,  0,  0,  5,-10,
+                -10, 10, 10, 10, 10, 10, 10,-10,
+                -10,  0, 10, 10, 10, 10,  0,-10,
+                -10,  5,  5, 10, 10,  5,  5,-10,
+                -10,  0,  5, 10, 10,  5,  0,-10,
+                -10,  0,  0,  0,  0,  0,  0,-10,
+                -20,-10,-10,-10,-10,-10,-10,-20
+            };
+            int[] kingTable = {
+                 20, 30, 10,  0,  0, 10, 30, 20,
+                 20, 20,  0,  0,  0,  0, 20, 20,
+                -10,-20,-20,-20,-20,-20,-20,-10,
+                -20,-30,-30,-40,-40,-30,-30,-20,
+                -30,-40,-40,-50,-50,-40,-40,-30,
+                -30,-40,-40,-50,-50,-40,-40,-30,
+                -30,-40,-40,-50,-50,-40,-40,-30,
+                -30,-40,-40,-50,-50,-40,-40,-30
+            };
+            int[] kingEndgameTable = {
+                -50,-30,-30,-30,-30,-30,-30,-50,
+                -30,-30,  0,  0,  0,  0,-30,-30,
+                -30,-10, 20, 30, 30, 20,-10,-30,
+                -30,-10, 30, 40, 40, 30,-10,-30,
+                -30,-10, 30, 40, 40, 30,-10,-30,
+                -30,-10, 20, 30, 30, 20,-10,-30,
+                -30,-20,-10,  0,  0,-10,-20,-30,
+                -50,-40,-30,-20,-20,-30,-40,-50
+            };
 
-        // Zobrist hashing keys (initialized with fixed seed for reproducibility)
-        private static readonly long[] zobristKeys = new long[PIECE_TYPES * BOARD_SQUARES];
-        static ChessEngine()
-        {
-            System.Random rng = new System.Random(0x12345678);
-            for (int i = 0; i < zobristKeys.Length; i++)
+            // Fill 0x88 tables (file 0-7, rank 0-7 → square = rank*16 + file)
+            for (int rank = 0; rank < 8; rank++)
             {
-                byte[] bytes = new byte[8];
-                rng.NextBytes(bytes);
-                zobristKeys[i] = BitConverter.ToInt64(bytes, 0);
+                for (int file = 0; file < 8; file++)
+                {
+                    int sq88 = rank * 16 + file;
+                    int sq64 = rank * 8 + file;
+                    pawnPST[sq88] = pawnTable[sq64];
+                    knightPST[sq88] = knightTable[sq64];
+                    bishopPST[sq88] = bishopTable[sq64];
+                    kingPST[sq88] = kingTable[sq64];
+                    kingEndgamePST[sq88] = kingEndgameTable[sq64];
+                }
             }
         }
 
-        // Piece material values (in centipawns)
-        // gutiDaam (Marathi: piece + price)
-        private static readonly int[] pieceValues = new int[6] {
-            100,    // pawn
-            320,    // knight
-            325,    // bishop
-            500,    // rook
-            900,    // queen
-            0       // king (infinite - not used for material)
-        };
-
-        // Pawn piece-square table (from white's perspective, a8=0 to h1=63)
-        private static readonly int[] pawnPST = new int[64] {
-             0,  0,  0,  0,  0,  0,  0,  0,
-             5, 10, 10,-20,-20, 10, 10,  5,
-             5, -5,-10,  0,  0,-10, -5,  5,
-             0,  0,  0, 20, 20,  0,  0,  0,
-             5,  5, 10, 25, 25, 10,  5,  5,
-            10, 10, 20, 30, 30, 20, 10, 10,
-            50, 50, 50, 50, 50, 50, 50, 50,
-             0,  0,  0,  0,  0,  0,  0,  0
-        };
-
-        // Knight piece-square table
-        private static readonly int[] knightPST = new int[64] {
-            -50,-40,-30,-30,-30,-30,-40,-50,
-            -40,-20,  0,  5,  5,  0,-20,-40,
-            -30,  5, 10, 15, 15, 10,  5,-30,
-            -30,  0, 15, 20, 20, 15,  0,-30,
-            -30,  5, 15, 20, 20, 15,  5,-30,
-            -30,  0, 10, 15, 15, 10,  0,-30,
-            -40,-20,  0,  0,  0,  0,-20,-40,
-            -50,-40,-30,-30,-30,-30,-40,-50
-        };
-
-        // Bishop piece-square table
-        private static readonly int[] bishopPST = new int[64] {
-            -20,-10,-10,-10,-10,-10,-10,-20,
-            -10,  5,  0,  0,  0,  0,  5,-10,
-            -10, 10, 10, 10, 10, 10, 10,-10,
-            -10,  0, 10, 10, 10, 10,  0,-10,
-            -10,  5,  5, 10, 10,  5,  5,-10,
-            -10,  0,  5, 10, 10,  5,  0,-10,
-            -10,  0,  0,  0,  0,  0,  0,-10,
-            -20,-10,-10,-10,-10,-10,-10,-20
-        };
-
-        // King piece-square table (middlegame)
-        private static readonly int[] kingPST = new int[64] {
-             20, 30, 10,  0,  0, 10, 30, 20,
-             20, 20,  0,  0,  0,  0, 20, 20,
-            -10,-20,-20,-20,-20,-20,-20,-10,
-            -20,-30,-30,-40,-40,-30,-30,-20,
-            -30,-40,-40,-50,-50,-40,-40,-30,
-            -30,-40,-40,-50,-50,-40,-40,-30,
-            -30,-40,-40,-50,-50,-40,-40,-30,
-            -30,-40,-40,-50,-50,-40,-40,-30
-        };
-
-        // King piece-square table (endgame - king becomes active)
-        private static readonly int[] kingEndgamePST = new int[64] {
-            -50,-30,-30,-30,-30,-30,-30,-50,
-            -30,-30,  0,  0,  0,  0,-30,-30,
-            -30,-10, 20, 30, 30, 20,-10,-30,
-            -30,-10, 30, 40, 40, 30,-10,-30,
-            -30,-10, 30, 40, 40, 30,-10,-30,
-            -30,-10, 20, 30, 30, 20,-10,-30,
-            -30,-20,-10,  0,  0,-10,-20,-30,
-            -50,-40,-30,-20,-20,-30,-40,-50
-        };
-
-        // Flip table (for black PST lookup - mirrors the board)
-        private static readonly int[] flip = new int[64] {
-            56, 57, 58, 59, 60, 61, 62, 63,
-            48, 49, 50, 51, 52, 53, 54, 55,
-            40, 41, 42, 43, 44, 45, 46, 47,
-            32, 33, 34, 35, 36, 37, 38, 39,
-            24, 25, 26, 27, 28, 29, 30, 31,
-            16, 17, 18, 19, 20, 21, 22, 23,
-             8,  9, 10, 11, 12, 13, 14, 15,
-             0,  1,  2,  3,  4,  5,  6,  7
-        };
-
-        // ================================================================
-        // INSTANCE FIELDS (from il2cpp.h - EivaaChess_Game_SechDMG_Fields)
-        // ================================================================
-
-        private int[] pieceColor;            // 0x10 - Color of each piece (WHITE/BLACK)
-        private int[] pieces;                // 0x18 - Piece type array (mailbox)
-        private int currentSide;             // 0x20 - Side to move (WHITE or BLACK)
-        private int opponentSide;            // 0x24 - Opponent side
-        private int castlingRights;          // 0x28 - Castling rights (4 bits)
-        private int enPassantSquare;         // 0x2C - En passant target square
-        private int fiftyMoveRule;           // 0x30 - Half-move clock for 50-move rule
-        private int searchPly;               // 0x34 - Current search ply
-        private int fullMoveNumber;          // 0x38 - Full move number
-        private int[,] historyHeuristic;     // 0x40 - History heuristic table
-        private HistoryMove[] moveHistory;   // 0x48 - Move history stack (for unmake)
-        private Move repetitionMove;         // 0x50 - Last repeated move
-        private OpeningBook openingBook;     // 0x58 - Opening book reference
-        private ScoredMove[] scoredMoves;    // 0x60 - Scored moves list (current ply)
-        private int[] moveIndexList;         // 0x68 - Move index list (per ply)
-        private Move[,] principalVariation;  // 0x70 - PV table [ply, move]
-        private int[] pvLength;              // 0x78 - PV length per ply
-        private bool followPV;               // 0x80 - Follow PV flag
-        private bool isThinking;             // 0x81 - Is thinking flag
-        private int[,] pawnRank;             // 0x88 - Pawn rank array (for pawn structure)
-        private int[] pieceMaterial;         // 0x90 - Material count per side
-        private int[] pawnMaterial;          // 0x98 - Pawn material per side
-
-        // ================================================================
-        // CONSTRUCTOR
-        // ================================================================
-
         public ChessEngine()
         {
-            // Initialize arrays
-            pieceColor = new int[64];
-            pieces = new int[64];
-            historyHeuristic = new int[64, 64];
-            moveHistory = new HistoryMove[MAX_PLY];
-            scoredMoves = new ScoredMove[MAX_MOVES];
-            moveIndexList = new int[MAX_PLY];
-            principalVariation = new Move[MAX_PLY, MAX_PLY];
-            pvLength = new int[MAX_PLY];
-            pawnRank = new int[2, 10];  // [side, file]
-            pieceMaterial = new int[2];
-            pawnMaterial = new int[2];
-            openingBook = new OpeningBook();
+            board = new int[128];
+            pieceColor = new int[128];
+            moveList = new List<Move>[MAX_PLY];
+            for (int i = 0; i < MAX_PLY; i++)
+                moveList[i] = new List<Move>(128);
+            history = new Stack<HistoryMove>();
+            bestMove = new Move();
+            searching = false;
         }
 
         // ================================================================
         // PUBLIC API
         // ================================================================
 
-        /// <summary>
-        /// Get the best move for the current position.
-        /// Original RVA: 0xEE4948 (EkChalBatao)
-        /// </summary>
         public string GetBestMove(string fen, string lastMove, int depth, bool exactMove)
         {
-            if (isThinking) return null;
-            isThinking = true;
+            // Reset state
+            searching = false;
+            bestMove = new Move();
+            ply = 0;
+            history.Clear();
 
-            // Initialize the board from FEN
             ParseFEN(fen);
+            searching = true;
 
-            // Try opening book first (for first OPENING_MOVES_COUNT moves)
-            if (fullMoveNumber < OPENING_MOVES_COUNT)
+            // Iterative deepening
+            for (int d = 1; d <= Math.Min(depth, MAX_DEPTH); d++)
             {
-                short openingMove = openingBook.GetOpeningMove(fullMoveNumber);
-                if (openingMove >= 1)
-                {
-                    byte fromSquare = (byte)((openingMove >> 8) & 0xFF);
-                    byte toSquare = (byte)(openingMove & 0xFF);
-                    Move move = new Move
-                    {
-                        fromSquare = fromSquare,
-                        toSquare = toSquare
-                    };
-                    isThinking = false;
-                    return move.ToString();
-                }
+                int score = AlphaBeta(d, int.MinValue + 1, int.MaxValue, false);
+                // bestMove is updated inside AlphaBeta
             }
 
-            // Start the alpha-beta search with iterative deepening
-            StartSearch(depth, exactMove);
+            searching = false;
 
-            isThinking = false;
+            if (bestMove.fromSquare == 0 && bestMove.toSquare == 0)
+            {
+                // Fallback: return first legal move
+                var moves = GenerateLegalMoves();
+                if (moves.Count > 0)
+                    return MoveToCAN(moves[0]);
+                return null;
+            }
 
-            // Return the best move (first in PV)
-            if (pvLength[0] > 0)
-                return principalVariation[0, 0].ToString();
-            return null;
+            return MoveToCAN(bestMove);
         }
 
         // ================================================================
         // FEN PARSING
         // ================================================================
 
-        /// <summary>
-        /// Parse FEN string and set up the board.
-        /// Original RVA: 0xEE4130 (SamjoPHAN)
-        /// </summary>
         public void ParseFEN(string fen)
         {
-            // Reset board
-            for (int i = 0; i < 64; i++)
+            // Clear board
+            for (int i = 0; i < 128; i++)
             {
-                pieces[i] = EMPTY;
-                pieceColor[i] = COLOR_NONE;
+                board[i] = EMPTY;
+                pieceColor[i] = NO_COLOR;
             }
             castlingRights = 0;
-            enPassantSquare = -1;
-            fiftyMoveRule = 0;
+            enPassantSq = -1;
+            halfMoveClock = 0;
             fullMoveNumber = 1;
 
-            string[] parts = fen.Split(' ');
-            if (parts.Length < 1) return;
+            string[] parts = fen.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return;
 
-            // Parse board position
-            int rank = 7, file = 0;
+            // Parse board (FEN starts from rank 8 = top)
+            int rank = 0, file = 0;
             foreach (char c in parts[0])
             {
                 if (c == '/')
                 {
-                    rank--;
+                    rank++;
                     file = 0;
                 }
                 else if (char.IsDigit(c))
                 {
-                    file += (c - '0');
+                    file += c - '0';
                 }
                 else
                 {
-                    int square = rank * 8 + file;
+                    int sq88 = rank * 16 + file;
                     int color = char.IsUpper(c) ? WHITE : BLACK;
                     int piece = char.ToLower(c) switch
                     {
@@ -388,149 +247,586 @@ namespace Chess3D.Game
                         'k' => PIECE_KING,
                         _ => EMPTY
                     };
-                    pieces[square] = piece;
-                    pieceColor[square] = color;
+                    board[sq88] = piece;
+                    pieceColor[sq88] = color;
                     file++;
                 }
             }
 
             // Side to move
-            if (parts.Length > 1)
-                currentSide = parts[1] == "w" ? WHITE : BLACK;
-            opponentSide = currentSide == WHITE ? BLACK : WHITE;
+            side = (parts.Length > 1 && parts[1] == "w") ? WHITE : BLACK;
 
-            // Castling rights
+            // Castling
             if (parts.Length > 2)
             {
-                if (parts[2].Contains('K')) castlingRights |= 0x1;
-                if (parts[2].Contains('Q')) castlingRights |= 0x2;
-                if (parts[2].Contains('k')) castlingRights |= 0x4;
-                if (parts[2].Contains('q')) castlingRights |= 0x8;
+                if (parts[2].Contains('K')) castlingRights |= 1;
+                if (parts[2].Contains('Q')) castlingRights |= 2;
+                if (parts[2].Contains('k')) castlingRights |= 4;
+                if (parts[2].Contains('q')) castlingRights |= 8;
             }
 
             // En passant
             if (parts.Length > 3 && parts[3] != "-")
             {
-                int file_ep = parts[3][0] - 'a';
-                int rank_ep = parts[3][1] - '1';
-                enPassantSquare = rank_ep * 8 + file_ep;
+                int epFile = parts[3][0] - 'a';
+                int epRank = 8 - (parts[3][1] - '0');  // FEN rank 8 = our rank 0
+                enPassantSq = epRank * 16 + epFile;
             }
 
             // Halfmove clock
-            if (parts.Length > 4 && int.TryParse(parts[4], out int halfmove))
-                fiftyMoveRule = halfmove;
+            if (parts.Length > 4 && int.TryParse(parts[4], out int hm))
+                halfMoveClock = hm;
 
             // Fullmove number
-            if (parts.Length > 5 && int.TryParse(parts[5], out int fullmove))
-                fullMoveNumber = fullmove;
+            if (parts.Length > 5 && int.TryParse(parts[5], out int fm))
+                fullMoveNumber = fm;
         }
 
         // ================================================================
-        // SEARCH
+        // MOVE GENERATION (0x88 board)
         // ================================================================
 
-        /// <summary>
-        /// Start the search with iterative deepening.
-        /// Original RVA: 0xEE4DFC (SochnaSuruKro)
-        /// </summary>
-        private void StartSearch(int maxDepth, bool exactMove)
-        {
-            searchPly = 0;
-            followPV = false;
+        private static bool OnBoard(int sq) => (sq & 0x88) == 0;
 
-            // Iterative deepening
-            for (int depth = 1; depth <= maxDepth; depth++)
+        private List<Move> GenerateLegalMoves()
+        {
+            var pseudoMoves = new List<Move>();
+            GeneratePseudoMoves(pseudoMoves);
+
+            var legalMoves = new List<Move>();
+            foreach (var move in pseudoMoves)
             {
-                followPV = true;
-                int score = AlphaBeta(int.MinValue, int.MaxValue, depth, exactMove);
+                MakeMove(move);
+                if (!IsInCheck(side == WHITE ? BLACK : WHITE))  // Check if OUR king is in check (side already swapped)
+                    legalMoves.Add(move);
+                UnmakeMove(move);
+            }
+            return legalMoves;
+        }
+
+        private void GeneratePseudoMoves(List<Move> moves)
+        {
+            for (int sq = 0; sq < 128; sq++)
+            {
+                if ((sq & 0x88) != 0) continue;  // Off board
+                if (board[sq] == EMPTY) continue;
+                if (pieceColor[sq] != side) continue;
+
+                switch (board[sq])
+                {
+                    case PIECE_PAWN:
+                        GeneratePawnMoves(sq, moves);
+                        break;
+                    case PIECE_KNIGHT:
+                        GenerateKnightMoves(sq, moves);
+                        break;
+                    case PIECE_BISHOP:
+                        GenerateSlidingMoves(sq, bishopDirs, moves);
+                        break;
+                    case PIECE_ROOK:
+                        GenerateSlidingMoves(sq, rookDirs, moves);
+                        break;
+                    case PIECE_QUEEN:
+                        GenerateSlidingMoves(sq, queenDirs, moves);
+                        break;
+                    case PIECE_KING:
+                        GenerateKingMoves(sq, moves);
+                        break;
+                }
             }
         }
 
-        /// <summary>
-        /// Alpha-beta search with pruning.
-        /// Original RVA: 0xEE4E78 (DhoondoNormal)
-        /// </summary>
-        private int AlphaBeta(int alpha, int beta, int depth, bool exactMove)
+        private void GeneratePawnMoves(int from, List<Move> moves)
         {
-            // Leaf node - evaluate
-            if (depth == 0)
-                return QuiescenceSearch(alpha, beta, exactMove);
+            int forward = side == WHITE ? -16 : 16;  // 0x88: white moves up (-16), black moves down (+16)
+            int startRank = side == WHITE ? 6 : 1;   // Rank 2 (white) = row 6, Rank 7 (black) = row 1
+            int promoRank = side == WHITE ? 0 : 7;   // Rank 8 (white) = row 0, Rank 1 (black) = row 7
 
-            // Generate legal moves
-            GenerateMoves();
-
-            int moveCount = moveIndexList[searchPly + 1] - moveIndexList[searchPly];
-            if (moveCount == 0)
+            // Forward one
+            int to = from + forward;
+            if (OnBoard(to) && board[to] == EMPTY)
             {
-                // No legal moves - checkmate or stalemate
-                if (IsInCheck(currentSide))
-                    return -30000 + searchPly;  // Checkmate (prefer later mates)
+                if (to / 16 == promoRank)
+                    AddPromotionMoves(from, to, 0, moves);
+                else
+                    moves.Add(MakeMove(from, to, 0));
+
+                // Double push
+                if (from / 16 == startRank)
+                {
+                    int to2 = from + 2 * forward;
+                    if (OnBoard(to2) && board[to2] == EMPTY)
+                        moves.Add(MakeMove(from, to2, FLAG_DOUBLE_PAWN));
+                }
+            }
+
+            // Captures
+            int[] capDirs = side == WHITE ? new[] { -15, -17 } : new[] { 15, 17 };
+            foreach (int d in capDirs)
+            {
+                int capTo = from + d;
+                if (!OnBoard(capTo)) continue;
+                if (board[capTo] != EMPTY && pieceColor[capTo] != side)
+                {
+                    if (capTo / 16 == promoRank)
+                        AddPromotionMoves(from, capTo, FLAG_CAPTURE, moves);
+                    else
+                        moves.Add(MakeMove(from, capTo, FLAG_CAPTURE));
+                }
+                else if (capTo == enPassantSq && enPassantSq >= 0)
+                {
+                    moves.Add(MakeMove(from, capTo, FLAG_CAPTURE | FLAG_EN_PASSANT));
+                }
+            }
+        }
+
+        private void AddPromotionMoves(int from, int to, byte flags, List<Move> moves)
+        {
+            moves.Add(MakeMove(from, to, flags, PIECE_QUEEN));
+            moves.Add(MakeMove(from, to, flags, PIECE_ROOK));
+            moves.Add(MakeMove(from, to, flags, PIECE_BISHOP));
+            moves.Add(MakeMove(from, to, flags, PIECE_KNIGHT));
+        }
+
+        private void GenerateKnightMoves(int from, List<Move> moves)
+        {
+            foreach (int offset in knightOffsets)
+            {
+                int to = from + offset;
+                if (!OnBoard(to)) continue;
+                if (pieceColor[to] == side) continue;
+
+                byte flags = (board[to] != EMPTY) ? FLAG_CAPTURE : (byte)0;
+                moves.Add(MakeMove(from, to, flags));
+            }
+        }
+
+        private void GenerateSlidingMoves(int from, int[] dirs, List<Move> moves)
+        {
+            foreach (int dir in dirs)
+            {
+                int to = from + dir;
+                while (OnBoard(to))
+                {
+                    if (pieceColor[to] == side) break;
+
+                    byte flags = (board[to] != EMPTY) ? FLAG_CAPTURE : (byte)0;
+                    moves.Add(MakeMove(from, to, flags));
+
+                    if (board[to] != EMPTY) break;  // Capture, stop
+                    to += dir;
+                }
+            }
+        }
+
+        private void GenerateKingMoves(int from, List<Move> moves)
+        {
+            foreach (int offset in kingOffsets)
+            {
+                int to = from + offset;
+                if (!OnBoard(to)) continue;
+                if (pieceColor[to] == side) continue;
+
+                byte flags = (board[to] != EMPTY) ? FLAG_CAPTURE : (byte)0;
+                moves.Add(MakeMove(from, to, flags));
+            }
+
+            // Castling
+            if (side == WHITE && from == E1)
+            {
+                // Kingside
+                if ((castlingRights & 1) != 0 && board[E1 + 1] == EMPTY && board[E1 + 2] == EMPTY
+                    && board[H1] == PIECE_ROOK && pieceColor[H1] == WHITE
+                    && !IsSquareAttacked(E1, BLACK) && !IsSquareAttacked(E1 + 1, BLACK))
+                    moves.Add(MakeMove(E1, E1 + 2, FLAG_CASTLE));
+                // Queenside
+                if ((castlingRights & 2) != 0 && board[E1 - 1] == EMPTY && board[E1 - 2] == EMPTY && board[E1 - 3] == EMPTY
+                    && board[A1] == PIECE_ROOK && pieceColor[A1] == WHITE
+                    && !IsSquareAttacked(E1, BLACK) && !IsSquareAttacked(E1 - 1, BLACK))
+                    moves.Add(MakeMove(E1, E1 - 2, FLAG_CASTLE));
+            }
+            else if (side == BLACK && from == E8)
+            {
+                // Kingside
+                if ((castlingRights & 4) != 0 && board[E8 + 1] == EMPTY && board[E8 + 2] == EMPTY
+                    && board[H8] == PIECE_ROOK && pieceColor[H8] == BLACK
+                    && !IsSquareAttacked(E8, WHITE) && !IsSquareAttacked(E8 + 1, WHITE))
+                    moves.Add(MakeMove(E8, E8 + 2, FLAG_CASTLE));
+                // Queenside
+                if ((castlingRights & 8) != 0 && board[E8 - 1] == EMPTY && board[E8 - 2] == EMPTY && board[E8 - 3] == EMPTY
+                    && board[A8] == PIECE_ROOK && pieceColor[A8] == BLACK
+                    && !IsSquareAttacked(E8, WHITE) && !IsSquareAttacked(E8 - 1, WHITE))
+                    moves.Add(MakeMove(E8, E8 - 2, FLAG_CASTLE));
+            }
+        }
+
+        private static Move MakeMove(int from, int to, byte flags, int promo = 0)
+        {
+            return new Move
+            {
+                fromSquare = (byte)from,
+                toSquare = (byte)to,
+                moveFlags = flags,
+                promotionPiece = (byte)promo
+            };
+        }
+
+        // ================================================================
+        // MAKE / UNMAKE MOVE
+        // ================================================================
+
+        private void MakeMove(Move move)
+        {
+            int from = move.fromSquare;
+            int to = move.toSquare;
+            int piece = board[from];
+            int captured = board[to];
+
+            // Save state
+            history.Push(new HistoryMove
+            {
+                move = move,
+                capturedPiece = captured,
+                capturedColor = captured != EMPTY ? pieceColor[to] : NO_COLOR,
+                castlingRights = castlingRights,
+                enPassantSq = enPassantSq,
+                halfMoveClock = halfMoveClock
+            });
+
+            // Move the piece
+            board[to] = piece;
+            pieceColor[to] = side;
+            board[from] = EMPTY;
+            pieceColor[from] = NO_COLOR;
+
+            // En passant capture
+            if ((move.moveFlags & FLAG_EN_PASSANT) != 0)
+            {
+                int epCaptured = side == WHITE ? to + 16 : to - 16;  // White captures upward, so EP pawn is below
+                history.Peek().epCapturedSquare = epCaptured;
+                history.Peek().epCapturedPiece = board[epCaptured];
+                history.Peek().epCapturedColor = pieceColor[epCaptured];
+                board[epCaptured] = EMPTY;
+                pieceColor[epCaptured] = NO_COLOR;
+            }
+
+            // Set en passant square
+            enPassantSq = (move.moveFlags & FLAG_DOUBLE_PAWN) != 0
+                ? (side == WHITE ? from - 16 : from + 16)  // White double push: EP square is one step ahead
+                : -1;
+
+            // Promotion
+            if (move.promotionPiece != 0)
+                board[to] = move.promotionPiece;
+
+            // Castling - move the rook
+            if ((move.moveFlags & FLAG_CASTLE) != 0)
+            {
+                if (to == E1 + 2) { board[E1 + 1] = board[H1]; pieceColor[E1 + 1] = side; board[H1] = EMPTY; pieceColor[H1] = NO_COLOR; }
+                else if (to == E1 - 2) { board[E1 - 1] = board[A1]; pieceColor[E1 - 1] = side; board[A1] = EMPTY; pieceColor[A1] = NO_COLOR; }
+                else if (to == E8 + 2) { board[E8 + 1] = board[H8]; pieceColor[E8 + 1] = side; board[H8] = EMPTY; pieceColor[H8] = NO_COLOR; }
+                else if (to == E8 - 2) { board[E8 - 1] = board[A8]; pieceColor[E8 - 1] = side; board[A8] = EMPTY; pieceColor[A8] = NO_COLOR; }
+            }
+
+            // Update castling rights
+            if (piece == PIECE_KING)
+            {
+                if (side == WHITE) castlingRights &= ~3;  // Clear KQ
+                else castlingRights &= ~12;  // Clear kq
+            }
+            // If rook moved from original square
+            if (from == A1) castlingRights &= ~2;
+            if (from == H1) castlingRights &= ~1;
+            if (from == A8) castlingRights &= ~8;
+            if (from == H8) castlingRights &= ~4;
+            // If rook captured on original square
+            if (to == A1) castlingRights &= ~2;
+            if (to == H1) castlingRights &= ~1;
+            if (to == A8) castlingRights &= ~8;
+            if (to == H8) castlingRights &= ~4;
+
+            // Update halfmove clock
+            if (piece == PIECE_PAWN || captured != EMPTY)
+                halfMoveClock = 0;
+            else
+                halfMoveClock++;
+
+            // Swap side
+            side = side == WHITE ? BLACK : WHITE;
+            ply++;
+        }
+
+        private void UnmakeMove(Move move)
+        {
+            side = side == WHITE ? BLACK : WHITE;
+            ply--;
+
+            HistoryMove hist = history.Pop();
+            int from = move.fromSquare;
+            int to = move.toSquare;
+
+            // Move piece back
+            int piece = board[to];
+            if (move.promotionPiece != 0)
+                piece = PIECE_PAWN;  // Undo promotion
+            board[from] = piece;
+            pieceColor[from] = side;
+            board[to] = EMPTY;
+            pieceColor[to] = NO_COLOR;
+
+            // Restore captured piece
+            if (hist.capturedPiece != EMPTY)
+            {
+                board[to] = hist.capturedPiece;
+                pieceColor[to] = hist.capturedColor;
+            }
+
+            // Restore en passant capture
+            if ((move.moveFlags & FLAG_EN_PASSANT) != 0 && hist.epCapturedSquare >= 0)
+            {
+                board[hist.epCapturedSquare] = hist.epCapturedPiece;
+                pieceColor[hist.epCapturedSquare] = hist.epCapturedColor;
+            }
+
+            // Undo castling - move rook back
+            if ((move.moveFlags & FLAG_CASTLE) != 0)
+            {
+                if (to == E1 + 2) { board[H1] = board[E1 + 1]; pieceColor[H1] = side; board[E1 + 1] = EMPTY; pieceColor[E1 + 1] = NO_COLOR; }
+                else if (to == E1 - 2) { board[A1] = board[E1 - 1]; pieceColor[A1] = side; board[E1 - 1] = EMPTY; pieceColor[E1 - 1] = NO_COLOR; }
+                else if (to == E8 + 2) { board[H8] = board[E8 + 1]; pieceColor[H8] = side; board[E8 + 1] = EMPTY; pieceColor[E8 + 1] = NO_COLOR; }
+                else if (to == E8 - 2) { board[A8] = board[E8 - 1]; pieceColor[A8] = side; board[E8 - 1] = EMPTY; pieceColor[E8 - 1] = NO_COLOR; }
+            }
+
+            // Restore state
+            castlingRights = hist.castlingRights;
+            enPassantSq = hist.enPassantSq;
+            halfMoveClock = hist.halfMoveClock;
+        }
+
+        // ================================================================
+        // ATTACK DETECTION
+        // ================================================================
+
+        private bool IsSquareAttacked(int sq, int byColor)
+        {
+            // Pawn attacks
+            int[] pawnDirs = byColor == WHITE ? new[] { 15, 17 } : new[] { -15, -17 };  // If white attacks, pawn is below the target
+            foreach (int d in pawnDirs)
+            {
+                int from = sq + d;
+                if (OnBoard(from) && board[from] == PIECE_PAWN && pieceColor[from] == byColor)
+                    return true;
+            }
+
+            // Knight attacks
+            foreach (int d in knightOffsets)
+            {
+                int from = sq + d;
+                if (OnBoard(from) && board[from] == PIECE_KNIGHT && pieceColor[from] == byColor)
+                    return true;
+            }
+
+            // King attacks
+            foreach (int d in kingOffsets)
+            {
+                int from = sq + d;
+                if (OnBoard(from) && board[from] == PIECE_KING && pieceColor[from] == byColor)
+                    return true;
+            }
+
+            // Bishop/Queen diagonal
+            foreach (int d in bishopDirs)
+            {
+                int from = sq + d;
+                while (OnBoard(from))
+                {
+                    if (board[from] != EMPTY)
+                    {
+                        if (pieceColor[from] == byColor && (board[from] == PIECE_BISHOP || board[from] == PIECE_QUEEN))
+                            return true;
+                        break;
+                    }
+                    from += d;
+                }
+            }
+
+            // Rook/Queen orthogonal
+            foreach (int d in rookDirs)
+            {
+                int from = sq + d;
+                while (OnBoard(from))
+                {
+                    if (board[from] != EMPTY)
+                    {
+                        if (pieceColor[from] == byColor && (board[from] == PIECE_ROOK || board[from] == PIECE_QUEEN))
+                            return true;
+                        break;
+                    }
+                    from += d;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsInCheck(int color)
+        {
+            // Find king
+            int kingSq = -1;
+            for (int sq = 0; sq < 128; sq++)
+            {
+                if ((sq & 0x88) != 0) continue;
+                if (board[sq] == PIECE_KING && pieceColor[sq] == color)
+                {
+                    kingSq = sq;
+                    break;
+                }
+            }
+            if (kingSq < 0) return false;
+            return IsSquareAttacked(kingSq, color == WHITE ? BLACK : WHITE);
+        }
+
+        // ================================================================
+        // EVALUATION
+        // ================================================================
+
+        private int Evaluate()
+        {
+            int score = 0;
+            int whiteMaterial = 0, blackMaterial = 0;
+
+
+            for (int sq = 0; sq < 128; sq++)
+            {
+                if ((sq & 0x88) != 0) continue;
+                if (board[sq] == EMPTY) continue;
+
+                int piece = board[sq];
+                int color = pieceColor[sq];
+                int value = pieceValues[piece];
+
+                if (color == WHITE) whiteMaterial += value;
+                else blackMaterial += value;
+
+                // PST (from white's perspective; flip for black)
+                int pstSq = color == WHITE ? sq : MirrorSquare(sq);
+                int pstScore = piece switch
+                {
+                    PIECE_PAWN => pawnPST[pstSq],
+                    PIECE_KNIGHT => knightPST[pstSq],
+                    PIECE_BISHOP => bishopPST[pstSq],
+                    PIECE_KING => IsEndgame() ? kingEndgamePST[pstSq] : kingPST[pstSq],
+                    _ => 0
+                };
+
+                score += color == WHITE ? (value + pstScore) : -(value + pstScore);
+            }
+
+            // Return from side to move's perspective
+            return side == WHITE ? score : -score;
+        }
+
+        private static int MirrorSquare(int sq)
+        {
+            int rank = sq / 16;
+            int file = sq % 16;
+            return (7 - rank) * 16 + file;
+        }
+
+        private bool IsEndgame()
+        {
+            int totalMaterial = 0;
+            for (int sq = 0; sq < 128; sq++)
+            {
+                if ((sq & 0x88) != 0) continue;
+                if (board[sq] == EMPTY || board[sq] == PIECE_KING) continue;
+                totalMaterial += pieceValues[board[sq]];
+            }
+            return totalMaterial < 2600;
+        }
+
+        // ================================================================
+        // ALPHA-BETA SEARCH
+        // ================================================================
+
+        private int AlphaBeta(int depth, int alpha, int beta, bool nullMove)
+        {
+            if (depth == 0)
+                return Quiescence(alpha, beta);
+
+            var moves = GenerateLegalMoves();
+
+            if (moves.Count == 0)
+            {
+                // Checkmate or stalemate
+                if (IsInCheck(side))
+                    return -MATE_SCORE + ply;  // Prefer later mates
                 return 0;  // Stalemate
             }
 
-            // Sort moves (PV first, then by history heuristic)
-            if (followPV) SortPrincipalVariation();
+            // Move ordering: captures first (MVV-LVA)
+            moves.Sort((a, b) => ScoreMove(b).CompareTo(ScoreMove(a)));
 
-            int bestScore = int.MinValue;
-            int startIdx = moveIndexList[searchPly];
-            int endIdx = moveIndexList[searchPly + 1];
+            int bestScore = int.MinValue + 1;
 
-            for (int i = startIdx; i < endIdx; i++)
+            bool isRoot = (ply == 0);
+            for (int i = 0; i < moves.Count; i++)
             {
-                Move move = scoredMoves[i].move;
-
-                if (!MakeMove(move)) continue;
-
-                int score = -AlphaBeta(-beta, -alpha, depth - 1, exactMove);
-
-                UnmakeMove();
+                Move move = moves[i];
+                MakeMove(move);
+                int score;
+                if (isRoot)
+                {
+                    // At root, search with full window to get exact scores
+                    score = -AlphaBeta(depth - 1, int.MinValue + 1, int.MaxValue, false);
+                }
+                else
+                {
+                    score = -AlphaBeta(depth - 1, -beta, -alpha, false);
+                }
+                UnmakeMove(move);
 
                 if (score > bestScore)
                 {
                     bestScore = score;
-                    if (score > alpha)
-                    {
-                        alpha = score;
-                        // Update PV
-                        principalVariation[searchPly, 0] = move;
-                        for (int j = 0; j < pvLength[searchPly + 1]; j++)
-                            principalVariation[searchPly, j + 1] = principalVariation[searchPly + 1, j];
-                        pvLength[searchPly] = pvLength[searchPly + 1] + 1;
-                    }
-                    if (alpha >= beta)
-                    {
-                        // Beta cutoff - update history heuristic
-                        historyHeuristic[move.fromSquare, move.toSquare] += depth * depth;
-                        break;
-                    }
+                    if (ply == 0)
+                        bestMove = move;
                 }
+
+                if (score > alpha)
+                    alpha = score;
+
+                if (alpha >= beta && ply > 0)
+                    break;  // Beta cutoff (only for non-root)
             }
 
             return bestScore;
         }
 
-        /// <summary>
-        /// Quiescence search (search captures only until quiet position).
-        /// Original RVA: 0xEE5290 (DhoondoDhainya)
-        /// </summary>
-        private int QuiescenceSearch(int alpha, int beta, bool exactMove)
+        private int Quiescence(int alpha, int beta)
         {
             int standPat = Evaluate();
             if (standPat >= beta) return beta;
             if (standPat > alpha) alpha = standPat;
 
-            GenerateCaptures();
+            // Generate only captures
+            var captures = new List<Move>();
+            GeneratePseudoMoves(captures);
+            captures.RemoveAll(m => (m.moveFlags & FLAG_CAPTURE) == 0 && (m.moveFlags & FLAG_PROMOTION) == 0);
 
-            int startIdx = moveIndexList[searchPly];
-            int endIdx = moveIndexList[searchPly + 1];
+            // Order by MVV-LVA
+            captures.Sort((a, b) => ScoreMove(b).CompareTo(ScoreMove(a)));
 
-            for (int i = startIdx; i < endIdx; i++)
+            foreach (var move in captures)
             {
-                Move move = scoredMoves[i].move;
-                if (!MakeMove(move)) continue;
-
-                int score = -QuiescenceSearch(-beta, -alpha, exactMove);
-                UnmakeMove();
+                MakeMove(move);
+                if (IsInCheck(side == WHITE ? BLACK : WHITE))
+                {
+                    UnmakeMove(move);
+                    continue;
+                }
+                int score = -Quiescence(-beta, -alpha);
+                UnmakeMove(move);
 
                 if (score >= beta) return beta;
                 if (score > alpha) alpha = score;
@@ -539,669 +835,101 @@ namespace Chess3D.Game
             return alpha;
         }
 
-        // ================================================================
-        // MOVE GENERATION
-        // ================================================================
-
-        /// <summary>
-        /// Generate all legal moves for the current position.
-        /// Original RVA: 0xEE5DB8 (GeneratePlyMoves)
-        /// </summary>
-        private void GenerateMoves()
-        {
-            searchPly++;
-            moveIndexList[searchPly] = moveIndexList[searchPly - 1];
-
-            for (int sq = 0; sq < 64; sq++)
-            {
-                if (pieceColor[sq] != currentSide) continue;
-
-                int piece = pieces[sq];
-                switch (piece)
-                {
-                    case PIECE_PAWN:
-                        GeneratePawnMoves(sq);
-                        break;
-                    case PIECE_KNIGHT:
-                        GenerateKnightMoves(sq);
-                        break;
-                    case PIECE_BISHOP:
-                        GenerateSlidingMoves(sq, pieceOffsets[PIECE_BISHOP]);
-                        break;
-                    case PIECE_ROOK:
-                        GenerateSlidingMoves(sq, pieceOffsets[PIECE_ROOK]);
-                        break;
-                    case PIECE_QUEEN:
-                        GenerateSlidingMoves(sq, pieceOffsets[PIECE_QUEEN]);
-                        break;
-                    case PIECE_KING:
-                        GenerateKingMoves(sq);
-                        break;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Generate capture moves only (for quiescence search).
-        /// Original RVA: 0xEE6CB8 (GeneratePlyCaptureMoves)
-        /// </summary>
-        private void GenerateCaptures()
-        {
-            searchPly++;
-            moveIndexList[searchPly] = moveIndexList[searchPly - 1];
-
-            for (int sq = 0; sq < 64; sq++)
-            {
-                if (pieceColor[sq] != currentSide) continue;
-
-                int piece = pieces[sq];
-                switch (piece)
-                {
-                    case PIECE_PAWN:
-                        GeneratePawnCaptures(sq);
-                        break;
-                    case PIECE_KNIGHT:
-                        GenerateKnightCaptures(sq);
-                        break;
-                    case PIECE_BISHOP:
-                        GenerateSlidingCaptures(sq, pieceOffsets[PIECE_BISHOP]);
-                        break;
-                    case PIECE_ROOK:
-                        GenerateSlidingCaptures(sq, pieceOffsets[PIECE_ROOK]);
-                        break;
-                    case PIECE_QUEEN:
-                        GenerateSlidingCaptures(sq, pieceOffsets[PIECE_QUEEN]);
-                        break;
-                    case PIECE_KING:
-                        GenerateKingCaptures(sq);
-                        break;
-                }
-            }
-        }
-
-        private void GeneratePawnMoves(int from)
-        {
-            int direction = currentSide == WHITE ? -8 : 8;  // White moves up (toward 0), black down
-            int startRank = currentSide == WHITE ? 6 : 1;
-            int promoRank = currentSide == WHITE ? 0 : 7;
-
-            int to = from + direction;
-            if (to >= 0 && to < 64 && pieces[to] == EMPTY)
-            {
-                if (to / 8 == promoRank)
-                    AddPromotionMove(from, to, 0);
-                else
-                    AddMove(from, to, 0);
-
-                // Double push from start rank
-                if (from / 8 == startRank)
-                {
-                    int to2 = from + 2 * direction;
-                    if (pieces[to2] == EMPTY)
-                        AddMove(from, to2, FLAG_DOUBLE_PAWN);
-                }
-            }
-
-            // Captures (including en passant)
-            GeneratePawnCaptures(from);
-        }
-
-        private void GeneratePawnCaptures(int from)
-        {
-            int[] captureOffsets = currentSide == WHITE ? new[] { -9, -11 } : new[] { 9, 11 };
-            int promoRank = currentSide == WHITE ? 0 : 7;
-
-            foreach (int offset in captureOffsets)
-            {
-                int mailboxFrom = mailbox64[from];
-                int mailboxTo = mailboxFrom + offset;
-
-                if (mailbox[mailboxTo] == -1) continue;  // Off-board
-
-                int to = mailbox[mailboxTo];
-                if (to < 0 || to >= 64) continue;
-
-                // Normal capture
-                if (pieceColor[to] == opponentSide)
-                {
-                    if (to / 8 == promoRank)
-                        AddPromotionMove(from, to, FLAG_CAPTURE);
-                    else
-                        AddMove(from, to, FLAG_CAPTURE);
-                }
-                // En passant
-                else if (to == enPassantSquare)
-                {
-                    AddMove(from, to, FLAG_CAPTURE | FLAG_EN_PASSANT);
-                }
-            }
-        }
-
-        private void GenerateKnightMoves(int from)
-        {
-            int mailboxFrom = mailbox64[from];
-            foreach (int offset in pieceOffsets[PIECE_KNIGHT])
-            {
-                int mailboxTo = mailboxFrom + offset;
-                if (mailbox[mailboxTo] == -1) continue;
-
-                int to = mailbox[mailboxTo];
-                if (pieceColor[to] == currentSide) continue;
-
-                byte flags = pieceColor[to] == opponentSide ? FLAG_CAPTURE : (byte)0;
-                AddMove(from, to, flags);
-            }
-        }
-
-        private void GenerateKnightCaptures(int from)
-        {
-            int mailboxFrom = mailbox64[from];
-            foreach (int offset in pieceOffsets[PIECE_KNIGHT])
-            {
-                int mailboxTo = mailboxFrom + offset;
-                if (mailbox[mailboxTo] == -1) continue;
-
-                int to = mailbox[mailboxTo];
-                if (pieceColor[to] != opponentSide) continue;
-
-                AddMove(from, to, FLAG_CAPTURE);
-            }
-        }
-
-        private void GenerateSlidingMoves(int from, int[] offsets)
-        {
-            int mailboxFrom = mailbox64[from];
-            foreach (int offset in offsets)
-            {
-                int mailboxTo = mailboxFrom + offset;
-                while (mailbox[mailboxTo] != -1)
-                {
-                    int to = mailbox[mailboxTo];
-                    if (pieceColor[to] == currentSide) break;
-
-                    byte flags = pieceColor[to] == opponentSide ? FLAG_CAPTURE : (byte)0;
-                    AddMove(from, to, flags);
-
-                    if (pieceColor[to] == opponentSide) break;
-                    mailboxTo += offset;
-                }
-            }
-        }
-
-        private void GenerateSlidingCaptures(int from, int[] offsets)
-        {
-            int mailboxFrom = mailbox64[from];
-            foreach (int offset in offsets)
-            {
-                int mailboxTo = mailboxFrom + offset;
-                while (mailbox[mailboxTo] != -1)
-                {
-                    int to = mailbox[mailboxTo];
-                    if (pieceColor[to] == currentSide) break;
-                    if (pieceColor[to] == opponentSide)
-                    {
-                        AddMove(from, to, FLAG_CAPTURE);
-                        break;
-                    }
-                    mailboxTo += offset;
-                }
-            }
-        }
-
-        private void GenerateKingMoves(int from)
-        {
-            int mailboxFrom = mailbox64[from];
-            foreach (int offset in pieceOffsets[PIECE_KING])
-            {
-                int mailboxTo = mailboxFrom + offset;
-                if (mailbox[mailboxTo] == -1) continue;
-
-                int to = mailbox[mailboxTo];
-                if (pieceColor[to] == currentSide) continue;
-
-                byte flags = pieceColor[to] == opponentSide ? FLAG_CAPTURE : (byte)0;
-                AddMove(from, to, flags);
-            }
-
-            // Castling
-            if (currentSide == WHITE && from == E1)
-            {
-                if ((castlingRights & 0x1) != 0 && pieces[F1] == EMPTY && pieces[G1] == EMPTY
-                    && !IsSquareAttacked(E1, BLACK) && !IsSquareAttacked(F1, BLACK))
-                    AddMove(E1, G1, FLAG_CASTLE);
-                if ((castlingRights & 0x2) != 0 && pieces[D1] == EMPTY && pieces[C1] == EMPTY && pieces[B1] == EMPTY
-                    && !IsSquareAttacked(E1, BLACK) && !IsSquareAttacked(D1, BLACK))
-                    AddMove(E1, C1, FLAG_CASTLE);
-            }
-            else if (currentSide == BLACK && from == E8)
-            {
-                if ((castlingRights & 0x4) != 0 && pieces[F8] == EMPTY && pieces[G8] == EMPTY
-                    && !IsSquareAttacked(E8, WHITE) && !IsSquareAttacked(F8, WHITE))
-                    AddMove(E8, G8, FLAG_CASTLE);
-                if ((castlingRights & 0x8) != 0 && pieces[D8] == EMPTY && pieces[C8] == EMPTY && pieces[B8] == EMPTY
-                    && !IsSquareAttacked(E8, WHITE) && !IsSquareAttacked(D8, WHITE))
-                    AddMove(E8, C8, FLAG_CASTLE);
-            }
-        }
-
-        private void GenerateKingCaptures(int from)
-        {
-            int mailboxFrom = mailbox64[from];
-            foreach (int offset in pieceOffsets[PIECE_KING])
-            {
-                int mailboxTo = mailboxFrom + offset;
-                if (mailbox[mailboxTo] == -1) continue;
-
-                int to = mailbox[mailboxTo];
-                if (pieceColor[to] != opponentSide) continue;
-
-                AddMove(from, to, FLAG_CAPTURE);
-            }
-        }
-
-        /// <summary>
-        /// Add a move to the move list.
-        /// Original RVA: 0xEE73D0 (AddPlyMove)
-        /// </summary>
-        private void AddMove(int from, int to, byte flags)
-        {
-            int idx = moveIndexList[searchPly]++;
-            scoredMoves[idx].move = new Move
-            {
-                fromSquare = (byte)from,
-                toSquare = (byte)to,
-                promotionPiece = 0,
-                moveFlags = flags
-            };
-            scoredMoves[idx].score = 0;
-        }
-
-        /// <summary>
-        /// Add a promotion move (generates 4 moves: Q, R, B, N).
-        /// Original RVA: 0xEE7504 (AddPlyPromotionMove)
-        /// </summary>
-        private void AddPromotionMove(int from, int to, byte flags)
-        {
-            for (int promo = PIECE_QUEEN; promo >= PIECE_KNIGHT; promo--)
-            {
-                int idx = moveIndexList[searchPly]++;
-                scoredMoves[idx].move = new Move
-                {
-                    fromSquare = (byte)from,
-                    toSquare = (byte)to,
-                    promotionPiece = (byte)promo,
-                    moveFlags = (byte)(flags | FLAG_PROMOTION)
-                };
-                // Score: queen promotions highest
-                scoredMoves[idx].score = pieceValues[promo];
-            }
-        }
-
-        // ================================================================
-        // MAKE/UNMAKE MOVE
-        // ================================================================
-
-        /// <summary>
-        /// Make a move on the board.
-        /// Original RVA: 0xEE6570 (Make)
-        /// </summary>
-        private bool MakeMove(Move move)
-        {
-            // Save state for unmake
-            moveHistory[searchPly] = new HistoryMove
-            {
-                move = move,
-                capture = pieces[move.toSquare],
-                castle = castlingRights,
-                ep = enPassantSquare,
-                fifty = fiftyMoveRule
-            };
-
-            int from = move.fromSquare;
-            int to = move.toSquare;
-            int piece = pieces[from];
-
-            // Update castling rights
-            castlingRights &= castleMask[from];
-            castlingRights &= castleMask[to];
-
-            // Update fifty-move rule
-            if (pieces[to] != EMPTY || piece == PIECE_PAWN)
-                fiftyMoveRule = 0;
-            else
-                fiftyMoveRule++;
-
-            // Move the piece
-            pieces[to] = piece;
-            pieceColor[to] = currentSide;
-            pieces[from] = EMPTY;
-            pieceColor[from] = COLOR_NONE;
-
-            // Handle en passant capture
-            if ((move.moveFlags & FLAG_EN_PASSANT) != 0)
-            {
-                int capturedPawnSq = currentSide == WHITE ? to + 8 : to - 8;
-                pieces[capturedPawnSq] = EMPTY;
-                pieceColor[capturedPawnSq] = COLOR_NONE;
-            }
-
-            // Set en passant square (for double pawn push)
-            enPassantSquare = (move.moveFlags & FLAG_DOUBLE_PAWN) != 0
-                ? (currentSide == WHITE ? from - 8 : from + 8)
-                : -1;
-
-            // Handle promotion
-            if (move.promotionPiece != 0)
-                pieces[to] = move.promotionPiece;
-
-            // Handle castling (move the rook)
-            if ((move.moveFlags & FLAG_CASTLE) != 0)
-            {
-                if (to == G1) { pieces[F1] = PIECE_ROOK; pieceColor[F1] = WHITE; pieces[H1] = EMPTY; pieceColor[H1] = COLOR_NONE; }
-                else if (to == C1) { pieces[D1] = PIECE_ROOK; pieceColor[D1] = WHITE; pieces[A1] = EMPTY; pieceColor[A1] = COLOR_NONE; }
-                else if (to == G8) { pieces[F8] = PIECE_ROOK; pieceColor[F8] = BLACK; pieces[H8] = EMPTY; pieceColor[H8] = COLOR_NONE; }
-                else if (to == C8) { pieces[D8] = PIECE_ROOK; pieceColor[D8] = BLACK; pieces[A8] = EMPTY; pieceColor[A8] = COLOR_NONE; }
-            }
-
-            // Swap sides
-            int temp = currentSide;
-            currentSide = opponentSide;
-            opponentSide = temp;
-
-            // Check if the move leaves our king in check (illegal)
-            if (IsInCheck(opponentSide))
-            {
-                UnmakeMove();
-                return false;
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Undo the last move.
-        /// Original RVA: 0xEE6A98 (PichheLe)
-        /// </summary>
-        private void UnmakeMove()
-        {
-            // Swap sides back
-            int temp = currentSide;
-            currentSide = opponentSide;
-            opponentSide = temp;
-
-            HistoryMove hist = moveHistory[searchPly];
-            Move move = hist.move;
-
-            int from = move.fromSquare;
-            int to = move.toSquare;
-
-            // Restore the moved piece
-            pieces[from] = pieces[to];
-            pieceColor[from] = currentSide;
-
-            // Restore captured piece
-            pieces[to] = hist.capture;
-            pieceColor[to] = hist.capture != EMPTY ? opponentSide : COLOR_NONE;
-
-            // Handle promotion (restore pawn)
-            if (move.promotionPiece != 0)
-                pieces[from] = PIECE_PAWN;
-
-            // Handle en passant
-            if ((move.moveFlags & FLAG_EN_PASSANT) != 0)
-            {
-                int capturedPawnSq = currentSide == WHITE ? to + 8 : to - 8;
-                pieces[capturedPawnSq] = PIECE_PAWN;
-                pieceColor[capturedPawnSq] = opponentSide;
-                pieces[to] = EMPTY;
-                pieceColor[to] = COLOR_NONE;
-            }
-
-            // Handle castling (move rook back)
-            if ((move.moveFlags & FLAG_CASTLE) != 0)
-            {
-                if (to == G1) { pieces[H1] = PIECE_ROOK; pieceColor[H1] = WHITE; pieces[F1] = EMPTY; pieceColor[F1] = COLOR_NONE; }
-                else if (to == C1) { pieces[A1] = PIECE_ROOK; pieceColor[A1] = WHITE; pieces[D1] = EMPTY; pieceColor[D1] = COLOR_NONE; }
-                else if (to == G8) { pieces[H8] = PIECE_ROOK; pieceColor[H8] = BLACK; pieces[F8] = EMPTY; pieceColor[F8] = COLOR_NONE; }
-                else if (to == C8) { pieces[A8] = PIECE_ROOK; pieceColor[A8] = BLACK; pieces[D8] = EMPTY; pieceColor[D8] = COLOR_NONE; }
-            }
-
-            // Restore state
-            castlingRights = hist.castle;
-            enPassantSquare = hist.ep;
-            fiftyMoveRule = hist.fifty;
-            searchPly--;
-        }
-
-        // ================================================================
-        // EVALUATION
-        // ================================================================
-
-        /// <summary>
-        /// Evaluate the current position.
-        /// Original RVA: 0xEE55AC (EvaluateBoard)
-        /// </summary>
-        private int Evaluate()
+        private int ScoreMove(Move move)
         {
             int score = 0;
-
-            // Material + Piece-Square Tables
-            for (int sq = 0; sq < 64; sq++)
+            if ((move.moveFlags & FLAG_CAPTURE) != 0)
             {
-                if (pieces[sq] == EMPTY) continue;
+                int victim = board[move.toSquare];
+                int attacker = board[move.fromSquare];
+                score += pieceValues[victim] * 10 - pieceValues[attacker];
+            }
+            if ((move.moveFlags & FLAG_PROMOTION) != 0)
+                score += pieceValues[move.promotionPiece];
+            return score;
+        }
 
-                int piece = pieces[sq];
-                int color = pieceColor[sq];
-                int pstIndex = color == WHITE ? sq : flip[sq];
+        // ================================================================
+        // MOVE NOTATION
+        // ================================================================
 
-                int pieceScore = pieceValues[piece];
-                int pstScore = piece switch
+        private static string MoveToCAN(Move move)
+        {
+            int from = move.fromSquare;
+            int to = move.toSquare;
+            int fromFile = from % 16;
+            int fromRank = 8 - (from / 16);
+            int toFile = to % 16;
+            int toRank = 8 - (to / 16);
+
+            string result = $"{(char)('a' + fromFile)}{fromRank}{(char)('a' + toFile)}{toRank}";
+            if (move.promotionPiece != 0)
+            {
+                result += move.promotionPiece switch
                 {
-                    PIECE_PAWN => pawnPST[pstIndex],
-                    PIECE_KNIGHT => knightPST[pstIndex],
-                    PIECE_BISHOP => bishopPST[pstIndex],
-                    PIECE_KING => IsEndgame() ? kingEndgamePST[pstIndex] : kingPST[pstIndex],
-                    _ => 0
+                    PIECE_QUEEN => 'q',
+                    PIECE_ROOK => 'r',
+                    PIECE_BISHOP => 'b',
+                    PIECE_KNIGHT => 'n',
+                    _ => '?'
                 };
-
-                score += color == WHITE ? (pieceScore + pstScore) : -(pieceScore + pstScore);
             }
-
-            // Return from the perspective of the side to move
-            return currentSide == WHITE ? score : -score;
-        }
-
-        private bool IsEndgame()
-        {
-            // Endgame if both sides have <= 1300 material (excluding king)
-            int totalMaterial = 0;
-            for (int sq = 0; sq < 64; sq++)
-            {
-                if (pieces[sq] != EMPTY && pieces[sq] != PIECE_KING)
-                    totalMaterial += pieceValues[pieces[sq]];
-            }
-            return totalMaterial <= 2600;
-        }
-
-        /// <summary>
-        /// Evaluate white pawn at square s.
-        /// Original RVA: 0xEE7590
-        /// </summary>
-        private int EvalWhitePawn(int s)
-        {
-            return pieceValues[PIECE_PAWN] + pawnPST[s];
-        }
-
-        /// <summary>
-        /// Evaluate black pawn at square s.
-        /// Original RVA: 0xEE78A4
-        /// </summary>
-        private int EvalBlackPawn(int s)
-        {
-            return pieceValues[PIECE_PAWN] + pawnPST[flip[s]];
-        }
-
-        /// <summary>
-        /// Evaluate white king at square s.
-        /// Original RVA: 0xEE7710
-        /// </summary>
-        private int EvalWhiteKing(int s)
-        {
-            return IsEndgame() ? kingEndgamePST[s] : kingPST[s];
-        }
-
-        /// <summary>
-        /// Evaluate black king at square s.
-        /// Original RVA: 0xEE7A40
-        /// </summary>
-        private int EvalBlackKing(int s)
-        {
-            return IsEndgame() ? kingEndgamePST[flip[s]] : kingPST[flip[s]];
+            return result;
         }
 
         // ================================================================
-        // ATTACK DETECTION
+        // DEBUG
         // ================================================================
 
-        /// <summary>
-        /// Check if a square is attacked by the given side.
-        /// Original RVA: 0xEE7D28 (Attacks)
-        /// </summary>
-        private bool IsSquareAttacked(int square, int bySide)
+        public void DebugBoard()
         {
-            int mailboxSq = mailbox64[square];
-
-            // Check pawn attacks
-            int[] pawnAttackOffsets = bySide == WHITE ? new[] { -9, -11 } : new[] { 9, 11 };
-            foreach (int offset in pawnAttackOffsets)
+            Console.WriteLine("  +---+---+---+---+---+---+---+---+");
+            for (int rank = 0; rank < 8; rank++)
             {
-                int mailboxTo = mailboxSq + offset;
-                if (mailbox[mailboxTo] != -1)
+                Console.Write((8 - rank) + " |");
+                for (int file = 0; file < 8; file++)
                 {
-                    int to = mailbox[mailboxTo];
-                    if (pieceColor[to] == bySide && pieces[to] == PIECE_PAWN)
-                        return true;
-                }
-            }
-
-            // Check knight attacks
-            foreach (int offset in pieceOffsets[PIECE_KNIGHT])
-            {
-                int mailboxTo = mailboxSq + offset;
-                if (mailbox[mailboxTo] != -1)
-                {
-                    int to = mailbox[mailboxTo];
-                    if (pieceColor[to] == bySide && pieces[to] == PIECE_KNIGHT)
-                        return true;
-                }
-            }
-
-            // Check sliding piece attacks (bishop/queen diagonal)
-            foreach (int offset in pieceOffsets[PIECE_BISHOP])
-            {
-                int mailboxTo = mailboxSq + offset;
-                while (mailbox[mailboxTo] != -1)
-                {
-                    int to = mailbox[mailboxTo];
-                    if (pieceColor[to] != COLOR_NONE)
+                    int sq = rank * 16 + file;
+                    int piece = board[sq];
+                    int color = pieceColor[sq];
+                    char c = piece switch
                     {
-                        if (pieceColor[to] == bySide && (pieces[to] == PIECE_BISHOP || pieces[to] == PIECE_QUEEN))
-                            return true;
-                        break;
-                    }
-                    mailboxTo += offset;
+                        PIECE_PAWN => 'p',
+                        PIECE_KNIGHT => 'n',
+                        PIECE_BISHOP => 'b',
+                        PIECE_ROOK => 'r',
+                        PIECE_QUEEN => 'q',
+                        PIECE_KING => 'k',
+                        _ => '.'
+                    };
+                    if (color == WHITE) c = char.ToUpper(c);
+                    Console.Write($" {c} |");
                 }
+                Console.WriteLine();
+                Console.WriteLine("  +---+---+---+---+---+---+---+---+");
             }
-
-            // Check sliding piece attacks (rook/queen orthogonal)
-            foreach (int offset in pieceOffsets[PIECE_ROOK])
-            {
-                int mailboxTo = mailboxSq + offset;
-                while (mailbox[mailboxTo] != -1)
-                {
-                    int to = mailbox[mailboxTo];
-                    if (pieceColor[to] != COLOR_NONE)
-                    {
-                        if (pieceColor[to] == bySide && (pieces[to] == PIECE_ROOK || pieces[to] == PIECE_QUEEN))
-                            return true;
-                        break;
-                    }
-                    mailboxTo += offset;
-                }
-            }
-
-            // Check king attacks
-            foreach (int offset in pieceOffsets[PIECE_KING])
-            {
-                int mailboxTo = mailboxSq + offset;
-                if (mailbox[mailboxTo] != -1)
-                {
-                    int to = mailbox[mailboxTo];
-                    if (pieceColor[to] == bySide && pieces[to] == PIECE_KING)
-                        return true;
-                }
-            }
-
-            return false;
+            Console.WriteLine("    a   b   c   d   e   f   g   h");
+            Console.WriteLine($"  Side: {(side == WHITE ? "White" : "Black")}, Castling: 0x{castlingRights:X}, EP: {enPassantSq}");
         }
 
-        /// <summary>
-        /// Check if the given side's king is in check.
-        /// Original RVA: 0xEE5D38 (InCheck)
-        /// </summary>
-        private bool IsInCheck(int side)
+        public int DebugCountMoves()
         {
-            // Find the king
-            int kingSquare = -1;
-            for (int sq = 0; sq < 64; sq++)
-            {
-                if (pieces[sq] == PIECE_KING && pieceColor[sq] == side)
-                {
-                    kingSquare = sq;
-                    break;
-                }
-            }
-
-            if (kingSquare == -1) return false;
-
-            int attacker = side == WHITE ? BLACK : WHITE;
-            return IsSquareAttacked(kingSquare, attacker);
+            var moves = GenerateLegalMoves();
+            return moves.Count;
         }
+    }
 
-        // ================================================================
-        // MOVE ORDERING
-        // ================================================================
-
-        /// <summary>
-        /// Sort moves by principal variation.
-        /// Original RVA: 0xEE6438 (SortPV)
-        /// </summary>
-        private void SortPrincipalVariation()
-        {
-            if (pvLength[searchPly] == 0) return;
-
-            Move pvMove = principalVariation[searchPly, 0];
-            int startIdx = moveIndexList[searchPly];
-            int endIdx = moveIndexList[searchPly + 1];
-
-            // Find the PV move and move it to the front
-            for (int i = startIdx; i < endIdx; i++)
-            {
-                if (scoredMoves[i].move == pvMove)
-                {
-                    // Swap with first move
-                    if (i != startIdx)
-                    {
-                        ScoredMove temp = scoredMoves[i];
-                        scoredMoves[i] = scoredMoves[startIdx];
-                        scoredMoves[startIdx] = temp;
-                    }
-                    scoredMoves[startIdx].score = 1000000;  // PV moves get highest score
-                    break;
-                }
-            }
-
-            followPV = false;
-        }
+    // Extended HistoryMove with EP capture info
+    internal class HistoryMove
+    {
+        public Move move;
+        public int capturedPiece;
+        public int capturedColor;
+        public int castlingRights;
+        public int enPassantSq;
+        public int halfMoveClock;
+        public int epCapturedSquare;
+        public int epCapturedPiece;
+        public int epCapturedColor;
     }
 }
