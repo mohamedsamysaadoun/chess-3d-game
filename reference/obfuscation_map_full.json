@@ -1,0 +1,548 @@
+{
+  "KhaataKhol": {
+    "new_name": "OpeningBook",
+    "type": "class",
+    "confidence": "high",
+    "reason": "Has Random + index array + move array; SuruBatao(int h) returns a short — 'tell opening' (Suru=begin, Batao=tell)"
+  },
+  "SechDMG": {
+    "new_name": "ChessEngine",
+    "type": "sealed class",
+    "confidence": "high",
+    "reason": "Complete chess engine: board representation (mailbox), move generation, alpha-beta search, evaluation"
+  },
+  "SechChal": {
+    "new_name": "Move",
+    "type": "struct",
+    "confidence": "high",
+    "reason": "Move struct: moveFrom, moveTo, promote, bits"
+  },
+  "KeemtiChal": {
+    "new_name": "ScoredMove",
+    "type": "struct",
+    "confidence": "high",
+    "reason": "Move + score (s field) — used in move sorting (Keemti = important/valuable)"
+  },
+  "HistoryMove": {
+    "new_name": "HistoryMove",
+    "type": "struct",
+    "confidence": "high",
+    "reason": "Stores move + undo info (capture, castle, ep, fifty)"
+  },
+  "PALI": {
+    "new_name": "Player",
+    "type": "enum",
+    "confidence": "high",
+    "reason": "EK=0, DO=1 (Hindi 1, 2) — two players"
+  },
+  "DMG_MUSKL": {
+    "new_name": "Difficulty",
+    "type": "enum",
+    "confidence": "high",
+    "reason": "EK/DO/TEEN/CHAR (Hindi 1-4) — four difficulty levels"
+  },
+  "Parda": {
+    "new_name": "GamePanel",
+    "type": "enum",
+    "confidence": "high",
+    "reason": "UI panel identifier (Parda = curtain/screen in Hindi)"
+  },
+  "SuruBatao": {
+    "new_name": "GetOpeningMove",
+    "type": "method",
+    "confidence": "high",
+    "reason": "In KhaataKhol; Suru=start, Batao=tell → 'tell opening'"
+  },
+  "SamjoPHAN": {
+    "new_name": "ParseFEN",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Takes string f (FEN); Samjo=understand; PHAN=FEN rearranged"
+  },
+  "EkChalBatao": {
+    "new_name": "GetBestMove",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Ek=one, Chal=move, Batao=tell → 'tell one move' (public API)"
+  },
+  "SochnaSuruKro": {
+    "new_name": "StartSearch",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Sochna=think, SuruKro=start → 'start thinking'"
+  },
+  "DhoondoNormal": {
+    "new_name": "AlphaBeta",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Dhoondo=search; signature matches alpha-beta: int DhoondoNormal(int alpha, int beta, int depth, bool eM)"
+  },
+  "DhoondoDhainya": {
+    "new_name": "QuiescenceSearch",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Dhainya=quiet/quiescence; only captures (signature: int DhoondoDhainya(int alpha, int beta, bool eM))"
+  },
+  "GeneratePlyMoves": {
+    "new_name": "GenerateMoves",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Standard chess engine method name"
+  },
+  "GeneratePlyCaptureMoves": {
+    "new_name": "GenerateCaptures",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Generates capture moves only (for quiescence)"
+  },
+  "AddPlyMove": {
+    "new_name": "AddMove",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Adds a move to the move list"
+  },
+  "AddPlyPromotionMove": {
+    "new_name": "AddPromotionMove",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Adds a promotion move"
+  },
+  "EvaluateBoard": {
+    "new_name": "Evaluate",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Standard eval function name"
+  },
+  "EvalWhitePawn": {
+    "new_name": "EvalWhitePawn",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Already clear"
+  },
+  "EvalBlackPawn": {
+    "new_name": "EvalBlackPawn",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Already clear"
+  },
+  "EvalWhiteKing": {
+    "new_name": "EvalWhiteKing",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Already clear"
+  },
+  "EvalBlackKing": {
+    "new_name": "EvalBlackKing",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Already clear"
+  },
+  "EvalWhiteKingPawn": {
+    "new_name": "EvalWhiteKingEndgame",
+    "type": "method",
+    "confidence": "high",
+    "reason": "King + pawn endgame eval"
+  },
+  "EvalBlackKingPawn": {
+    "new_name": "EvalBlackKingEndgame",
+    "type": "method",
+    "confidence": "high",
+    "reason": "King + pawn endgame eval"
+  },
+  "Make": {
+    "new_name": "MakeMove",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Standard make move"
+  },
+  "PichheLe": {
+    "new_name": "UnmakeMove",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Pichhe=behind, Le=take → 'take back'"
+  },
+  "Attacks": {
+    "new_name": "IsSquareAttacked",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Checks if square is attacked"
+  },
+  "InCheck": {
+    "new_name": "IsInCheck",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Checks if king is in check"
+  },
+  "SortPV": {
+    "new_name": "SortPrincipalVariation",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Sorts moves by PV"
+  },
+  "QuickSortMoveList": {
+    "new_name": "QuickSortMoves",
+    "type": "method",
+    "confidence": "high",
+    "reason": "QuickSort for moves"
+  },
+  "PartitionMoveList": {
+    "new_name": "PartitionMoves",
+    "type": "method",
+    "confidence": "high",
+    "reason": "Partition for QuickSort"
+  },
+  "ParseRegularCAN": {
+    "new_name": "ParseCAN",
+    "type": "method",
+    "confidence": "medium",
+    "reason": "CAN = Coordinate Algebraic Notation"
+  },
+  "kk_rand": {
+    "new_name": "random",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Random number generator"
+  },
+  "kk_idx": {
+    "new_name": "openingIndex",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Index into opening moves"
+  },
+  "kk_chals": {
+    "new_name": "openingMoves",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Opening move list"
+  },
+  "mailbox": {
+    "new_name": "mailboxBoard",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Classic mailbox board representation (10x12)"
+  },
+  "mailbox64": {
+    "new_name": "mailbox64",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Conversion table 64→mailbox"
+  },
+  "khasriSakto": {
+    "new_name": "slidingPieces",
+    "type": "field",
+    "confidence": "medium",
+    "reason": "Bool array: which pieces slide (rook, bishop, queen)"
+  },
+  "offsets": {
+    "new_name": "moveOffsets",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Move offsets for each piece"
+  },
+  "offset": {
+    "new_name": "pieceOffsets",
+    "type": "field",
+    "confidence": "medium",
+    "reason": "2D array of offsets per piece"
+  },
+  "castleMask": {
+    "new_name": "castleMask",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Bits to clear castling rights"
+  },
+  "zChabis": {
+    "new_name": "zobristKeys",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Zobrist hashing keys (Chabis = key in Hindi)"
+  },
+  "pColor": {
+    "new_name": "pieceColor",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Color of each piece on board"
+  },
+  "piece": {
+    "new_name": "pieces",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Piece array (mailbox representation)"
+  },
+  "cSide": {
+    "new_name": "currentSide",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Side to move"
+  },
+  "xSide": {
+    "new_name": "opponentSide",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Opponent side"
+  },
+  "castle": {
+    "new_name": "castlingRights",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Castling rights bits"
+  },
+  "yonP": {
+    "new_name": "enPassantSquare",
+    "type": "field",
+    "confidence": "high",
+    "reason": "En passant target square (yon=side?)"
+  },
+  "fifty": {
+    "new_name": "fiftyMoveRule",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Fifty-move rule counter"
+  },
+  "ply": {
+    "new_name": "searchPly",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Current search ply"
+  },
+  "moves": {
+    "new_name": "fullMoveNumber",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Full move counter"
+  },
+  "heuristicHistory": {
+    "new_name": "historyHeuristic",
+    "type": "field",
+    "confidence": "high",
+    "reason": "History heuristic for move ordering"
+  },
+  "history": {
+    "new_name": "moveHistory",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Move history stack (for unmake)"
+  },
+  "repMove": {
+    "new_name": "repetitionMove",
+    "type": "field",
+    "confidence": "medium",
+    "reason": "Last repeated move"
+  },
+  "khaataKhol": {
+    "new_name": "openingBook",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Reference to KhaataKhol (OpeningBook) instance"
+  },
+  "moveList": {
+    "new_name": "scoredMoves",
+    "type": "field",
+    "confidence": "high",
+    "reason": "List of ScoredMove (KeemtiChal)"
+  },
+  "moveIndexList": {
+    "new_name": "moveIndexList",
+    "type": "field",
+    "confidence": "medium",
+    "reason": "Index list for moves"
+  },
+  "pv": {
+    "new_name": "principalVariation",
+    "type": "field",
+    "confidence": "high",
+    "reason": "PV table [ply, move]"
+  },
+  "pvLength": {
+    "new_name": "pvLength",
+    "type": "field",
+    "confidence": "high",
+    "reason": "PV length per ply"
+  },
+  "followPV": {
+    "new_name": "followPV",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Flag to follow PV"
+  },
+  "bSochatAahe": {
+    "new_name": "isThinking",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Sochat Aahe = 'is thinking' in Marathi"
+  },
+  "gutiDaam": {
+    "new_name": "pieceValues",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Material values per piece (Guti=piece, Daam=price in Marathi)"
+  },
+  "pawnPcSq": {
+    "new_name": "pawnPST",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Pawn piece-square table"
+  },
+  "knightPcSq": {
+    "new_name": "knightPST",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Knight piece-square table"
+  },
+  "bishopPcSq": {
+    "new_name": "bishopPST",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Bishop piece-square table"
+  },
+  "kingPcSq": {
+    "new_name": "kingPST",
+    "type": "field",
+    "confidence": "high",
+    "reason": "King piece-square table (middlegame)"
+  },
+  "kingEndgamePcSq": {
+    "new_name": "kingEndgamePST",
+    "type": "field",
+    "confidence": "high",
+    "reason": "King PST for endgame"
+  },
+  "flip": {
+    "new_name": "flipBoard",
+    "type": "field",
+    "confidence": "medium",
+    "reason": "Board flip array (for black PST lookup)"
+  },
+  "pawnRank": {
+    "new_name": "pawnRank",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Pawn rank array (for doubled/isolated pawns)"
+  },
+  "pieceMat": {
+    "new_name": "pieceMaterial",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Material count per side"
+  },
+  "pawnMat": {
+    "new_name": "pawnMaterial",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Pawn material per side"
+  },
+  "DHOLA": {
+    "new_name": "EMPTY_PIECE",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "= 0, likely empty square"
+  },
+  "KOLA": {
+    "new_name": "OFFBOARD",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "= 1, likely off-board marker for mailbox"
+  },
+  "SANYA": {
+    "new_name": "COLOR_NONE",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "= 0, no color (Sanya=zero)"
+  },
+  "HAST": {
+    "new_name": "PIECE_ROOK",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "= 1; Hast=elephant in Marathi; in Indian chess, elephant=rook"
+  },
+  "BAJIR": {
+    "new_name": "PIECE_KNIGHT",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "= 2; Bajir might be knight (Wazir is queen in Indian chess)"
+  },
+  "NOKA": {
+    "new_name": "PIECE_BISHOP",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "= 3; Noka=boat in Marathi; boat=bishop in Indian chess"
+  },
+  "CHAMYA": {
+    "new_name": "PIECE_QUEEN",
+    "type": "const",
+    "confidence": "low",
+    "reason": "= 4; likely queen (Wazir=queen in Indian chess)"
+  },
+  "SENSA": {
+    "new_name": "PIECE_KING",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "= 5; Sensa may mean king (Shah=king)"
+  },
+  "SUNYA": {
+    "new_name": "PIECE_EMPTY",
+    "type": "const",
+    "confidence": "high",
+    "reason": "= 6; Sunya=zero/empty in Marathi"
+  },
+  "MX_D": {
+    "new_name": "MAX_DEPTH",
+    "type": "const",
+    "confidence": "high",
+    "reason": "Max search depth = 10"
+  },
+  "KK_SJ_C": {
+    "new_name": "OPENING_MOVES_COUNT",
+    "type": "const",
+    "confidence": "medium",
+    "reason": "Opening moves to consider = 5"
+  },
+  "T_CHAUKANS": {
+    "new_name": "BOARD_SQUARES",
+    "type": "const",
+    "confidence": "high",
+    "reason": "= 64, total board squares"
+  },
+  "PIECE_TYPE_NO": {
+    "new_name": "PIECE_TYPES",
+    "type": "const",
+    "confidence": "high",
+    "reason": "= 12, piece types (6 pieces × 2 colors)"
+  },
+  "MAX_PLY": {
+    "new_name": "MAX_PLY",
+    "type": "const",
+    "confidence": "high",
+    "reason": "Max search ply = 32"
+  },
+  "MAX_MOV": {
+    "new_name": "MAX_MOVES",
+    "type": "const",
+    "confidence": "high",
+    "reason": "Max moves per position = 1280"
+  },
+  "moveFrom": {
+    "new_name": "fromSquare",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Source square"
+  },
+  "moveTo": {
+    "new_name": "toSquare",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Destination square"
+  },
+  "promote": {
+    "new_name": "promotionPiece",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Promotion piece"
+  },
+  "bits": {
+    "new_name": "moveFlags",
+    "type": "field",
+    "confidence": "high",
+    "reason": "Move flags (capture, castle, ep, etc.)"
+  }
+}
